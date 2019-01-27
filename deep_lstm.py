@@ -16,7 +16,6 @@ import tensorboardX
 writer = tensorboardX.SummaryWriter()
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")
-output = 64
 
 if use_cuda:
     print("Using CUDA")
@@ -147,7 +146,7 @@ class Model(nn.Module):
         self.dropout = torch.nn.Dropout(dropout)
 
         #field contains the current state of inputs for the model eg ["T", "H", "E".. etc
-        self.field = [text[x] for x in range(n_prev)]
+        self.field = [text[x] for x in range(window)]
 
         #zeros out LSTM hidden and context vector
         self.clear_internal_states()
@@ -196,7 +195,6 @@ class Model(nn.Module):
         x = x.view(nbatches, -1)
 
         return x
-
 
 def splash(a):
     if a:
@@ -294,19 +292,19 @@ try:
         rate = 0.0123456789
     hidden = int(parse(sys.argv, ["--hidden", "-h"]))
     if not hidden or hidden == "":
-        hidden = 650
+        hidden = 512
     nbatches = int(parse(sys.argv, ["--batch", "-b"]))
     if not nbatches:
         nbatches = 2
     momentum = float(parse(sys.argv, ["--momentum", "-m"]))
     if not momentum:
-        momentum = 0.4
-    n_prev = int(parse(sys.argv, ["--previous", "-p"]))
-    if not n_prev:
-        n_prev = 9
+        momentum = 0.6
+    window = int(parse(sys.argv, ["--window", "-w"]))
+    if not window:
+        window = 12
     dropout = float(parse(sys.argv, ["--dropout", "-d"]))
     if not dropout:
-        dropout = 0.5
+        dropout = 0.7
     temperature = float(parse(sys.argv, ["--temp", "-t"]))
     if not temperature:
         temperature = 0.77
@@ -356,7 +354,7 @@ for l in text:
 alphabet.sort()
 alphabet_size = len(alphabet)
 
-model = Model(alphabet_size, n_prev, nbatches, dropout, rate, hidden).cuda()
+model = Model(alphabet_size, window, nbatches, dropout, rate, hidden).cuda()
 
 #load model
 if not model_filename == None:
@@ -377,8 +375,8 @@ def reset_model():
         #temperature_parameters.remove(t)
         d = 0.5
 
-        model = Model(alphabet_size, n_prev, nbatches, d, r, hidden).cuda()
-        model.counter = n_prev - 1
+        model = Model(alphabet_size, window, nbatches, d, r, hidden).cuda()
+        model.counter = window - 1
 
         print("\nParameters: \n -Rate: {} \n -Dropout: {}\n -Temperature: {}".format(r, d, temperature))
 
@@ -414,7 +412,7 @@ def train_cycle(model, temperature):
         total_loss = 0
 
         #1000 runs per minibatch
-        steps = 1000
+        steps = 100
         model.runs += 1
         print("")
 
