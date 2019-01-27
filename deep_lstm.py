@@ -74,8 +74,8 @@ class LSTM(nn.Module):
         self.forget_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
         self.forget_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
 
-        self.input_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
-        self.input_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
+        self.learn_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
+        self.learn_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
 
         self.focus_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
         self.focus_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
@@ -106,7 +106,7 @@ class LSTM(nn.Module):
 
         # process layers
         f = torch.add(self.forget_input(x), self.forget_hidden(self.hidden))
-        i = torch.add(self.input_input(x), self.input_hidden(self.hidden))
+        i = torch.add(self.learn_input(x), self.learn_hidden(self.hidden))
         s = torch.add(self.focus_input(x), self.focus_hidden(self.hidden))
         o = torch.add(self.output_input(x), self.output_hidden(self.hidden))
 
@@ -123,8 +123,6 @@ class LSTM(nn.Module):
         self.hidden = self.tanh(self.context) * o
 
         return self.hidden.clone()
-
-
 class Model(nn.Module):
 
     def __init__(self, size, prev, batch_size, dropout, rate, hidden):
