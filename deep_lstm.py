@@ -16,7 +16,6 @@ import tensorboardX
 writer = tensorboardX.SummaryWriter()
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")
-output = 64
 
 if use_cuda:
     print("Using CUDA")
@@ -364,10 +363,8 @@ for l in text:
 alphabet.sort()
 alphabet_size = len(alphabet)
 
-#create initial model or load
-if model_filename == None:
-    model = Model(alphabet_size, n_prev, nbatches, dropout, rate, hidden).cuda()
-else:
+#load model
+if not model_filename == None:
     loadmodel()
 
 # initialize and/or reset model for parameter search mode
@@ -399,7 +396,6 @@ def one_hot(char):
 
     return output
 
-
 # get output char from vectors
 def get_output(inp, t):
     inp = torch.nn.Softmax(dim=0)((inp / t).exp())
@@ -409,7 +405,6 @@ def get_output(inp, t):
 
     sample = numpy.random.choice(alphabet, p=inp)
     return sample
-
 
 # training cycle -- runs until net gets stuck in loop
 def train_cycle(model, temperature):
@@ -563,9 +558,11 @@ def train_cycle(model, temperature):
                 archive = str("dropout: {} rate: {} temperature: {}".format(model.d, model.r, temperature))
                 return
 
-
 # initialize program
 if search:
+    #initialize parameter search
     reset_model()
 else:
+    #initialize training cycle
+    model = Model(alphabet_size, n_prev, nbatches, dropout, rate, hidden).cuda()
     train_cycle(model, temperature)
