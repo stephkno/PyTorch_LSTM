@@ -299,13 +299,13 @@ try:
         rate = 0.0123456789
     hidden = int(parse(sys.argv, ["--hidden", "-h"]))
     if not hidden or hidden == "":
-        hidden = 650
+        hidden = 512
     nbatches = int(parse(sys.argv, ["--batch", "-b"]))
     if not nbatches:
         nbatches = 2
     momentum = float(parse(sys.argv, ["--momentum", "-m"]))
     if not momentum:
-        momentum = 0.4
+        momentum = 0.1
     n_prev = int(parse(sys.argv, ["--previous", "-p"]))
     if not n_prev:
         n_prev = 9
@@ -414,7 +414,7 @@ def train_cycle(model, temperature):
         total_loss = 0
 
         #1000 runs per minibatch
-        steps = 1000
+        steps = 350
         model.runs += 1
         print("")
 
@@ -506,7 +506,7 @@ def train_cycle(model, temperature):
 
         variety = []
         if model.runs % 10 == 0:
-            steps = 1000
+            steps = 3000
         else:
             steps = 300
 
