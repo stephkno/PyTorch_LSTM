@@ -30,11 +30,12 @@ keys = []
 best = []
 
 search = False
+freerun = False
 
 if search:
-    #create parameter search space
+    # create parameter search space
     rate_parameters = []
-    a = 0.005
+    a = 0.05
     for r in range(100):
         a += 0.0005
         rate_parameters.append(round(a, 3))
@@ -48,13 +49,14 @@ if search:
 
     temperature_parameters = []
     for a in range(100):
-        a = 0.0
+        a = 0.1
         for r in range(100):
             a += 0.01
             temperature_parameters.append(round(a, 2))
 
     print(len(dropout_parameters))
     print(len(rate_parameters))
+
 
 class LSTM(nn.Module):
 
@@ -69,16 +71,16 @@ class LSTM(nn.Module):
 
         self.hidden_size = hidden * batch
 
-        self.forget_input = torch.nn.Linear(size*prev*batch, self.hidden_size)
+        self.forget_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
         self.forget_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
 
-        self.input_input = torch.nn.Linear(size*prev*batch, self.hidden_size)
+        self.input_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
         self.input_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
 
-        self.state_input = torch.nn.Linear(size*prev*batch, self.hidden_size)
+        self.state_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
         self.state_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
 
-        self.output_input = torch.nn.Linear(size*prev*batch, self.hidden_size)
+        self.output_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
         self.output_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
 
         self.tanh = torch.nn.Tanh()
@@ -88,39 +90,40 @@ class LSTM(nn.Module):
 
         self.steps = 0
         self.generations = 0
-
-    def reset(self):
-        self.context = torch.zeros(self.hidden_size, device=device)
         self.hidden = torch.zeros(self.hidden_size, device=device)
 
-    def forward(self, x):
+    def reset(self):
+        #reset working memory and leave long term memory
+        self.context = torch.zeros(self.hidden_size, device=device)
 
-        #detach state tensors
+    def forward(self, x):
+        # detach state tensors
         self.context = self.context.detach()
         self.hidden = self.hidden.detach()
 
-        #layers
+        # layers
         x = x.detach().view(-1).cuda()
 
-        #process layers
+        # process layers
         f = torch.add(self.forget_input(x), self.forget_hidden(self.hidden))
         i = torch.add(self.input_input(x), self.input_hidden(self.hidden))
         s = torch.add(self.state_input(x), self.state_hidden(self.hidden))
         o = torch.add(self.output_input(x), self.output_hidden(self.hidden))
 
-        #activations
+        # activations
         f = self.sigmoid(f)
         i = self.sigmoid(i)
         s = self.tanh(s)
         o = self.sigmoid(o)
 
-        #gating mechanism
+        # gating mechanism
         self.context = (f * self.context) + (i * s)
 
-        #tanh output
+        # tanh output
         self.hidden = self.tanh(self.context) * o
 
         return self.hidden.clone()
+
 
 class Model(nn.Module):
 
@@ -128,6 +131,9 @@ class Model(nn.Module):
         super(Model, self).__init__()
 
         self.rnn1 = LSTM(size, hidden, batch_size, prev, rate).cuda()
+        self.rnn2 = LSTM(hidden, hidden, batch_size, 1, rate).cuda()
+
+        self.output_decoder1 = torch.nn.Linear(hidden * batch_size, size * batch_size).cuda()
 
         self.d = dropout
         self.r = rate
@@ -140,7 +146,6 @@ class Model(nn.Module):
 
         self.rate = rate
 
-        self.output_decoder = torch.nn.Linear(hidden * batch_size, size * batch_size).cuda()
         self.dropout = torch.nn.Dropout(dropout)
 
         self.field = [text[x] for x in range(n_prev)]
@@ -148,27 +153,26 @@ class Model(nn.Module):
         self.clear_internal_states()
 
         self.loss_function = torch.nn.CrossEntropyLoss()
-        #self.optimizer = torch.optim.Adam([
+        # self.optimizer = torch.optim.Adam([
         #    {'params': self.parameters()},
         #    ], weight_decay=0.0, lr=rate)
         self.optimizer = torch.optim.SGD(params=self.parameters(), lr=rate, momentum=momentum)
         self.initialize_weights()
 
-        #std = 1.0/math.sqrt(self.rnn.hidden_size)
+        # std = 1.0/math.sqrt(self.rnn.hidden_size)
 
-        #for p in self.parameters():
+        # for p in self.parameters():
         #    p.data.uniform_(-std, std)
 
     def clear_internal_states(self):
         self.rnn1.reset()
+        self.rnn2.reset()
 
     def initialize_weights(self):
-
-        self.output_decoder.bias.data.fill_(0)
-        self.output_decoder.weight.data.uniform_(-1,1)
+        self.output_decoder1.bias.data.fill_(0)
+        self.output_decoder1.weight.data.uniform_(-1, 1)
 
     def get_input_vector(self, chars):
-
         out = []
 
         for c in chars:
@@ -178,20 +182,24 @@ class Model(nn.Module):
         return out
 
     def forward(self, inp):
-
         x = torch.autograd.Variable((inp).view(-1))
 
         x = self.rnn1(x)
         x = self.dropout(x)
 
-        x = self.output_decoder(x)
+        x = self.rnn2(x)
+        x = self.dropout(x)
+
+        x = self.output_decoder1(x)
         x = x.view(nbatches, -1)
 
         return x
 
+
 def splash(a):
     if a:
-        print("RNN Text Generator\nUsage:\n\n-f --filename: filename of input text - required\n-h --hidden: number of hidden layers, default 1\n-r --rate: learning rate\n-p --prev: number of previous states to observe, default 0.05")
+        print(
+            "RNN Text Generator\nUsage:\n\n-f --filename: filename of input text - required\n-h --hidden: number of hidden layers, default 1\n-r --rate: learning rate\n-p --prev: number of previous states to observe, default 0.05")
         print("\nExample usage: <command> -f input.txt -h 5 -r 0.025")
     else:
         print("\nRNN Text Generator\n")
@@ -202,33 +210,35 @@ def splash(a):
         params.pop(0)
 
         for a in list(params):
-            print(a, " ",end="")
+            print(a, " ", end="")
 
         print("\n")
         print(datetime.datetime.now())
         print("\n")
 
+
 def getIndexFromLetter(letter, list):
     return list.index(letter)
+
 
 def getLetterFromIndex(i, list):
     return list[i]
 
-def parse(args, arg):
 
+def parse(args, arg):
     for i in range(len(args)):
         if args[i] in arg:
-            if len(args) < i+1:
+            if len(args) < i + 1:
                 return ""
-            if args[i+1].startswith("-"):
+            if args[i + 1].startswith("-"):
                 splash(True)
             else:
-                return args[i+1]
+                return args[i + 1]
 
     return False
 
-def savemodel():
 
+def savemodel():
     print("Save model parameters? [y/n]➡")
     filename_input = input()
 
@@ -248,13 +258,14 @@ def savemodel():
             'optimizer_state_dict': model.optimizer.state_dict()
         }, modelname)
 
-    #print("Best parameters:")
-    #print(best)
+    # print("Best parameters:")
+    # print(best)
     quit()
+
 
 def loadmodel():
     print("Load")
-    #load model parameters if checkpoint specified
+    # load model parameters if checkpoint specified
     if not model_filename == False:
         try:
             checkpoint = torch.load(model_filename)
@@ -280,7 +291,7 @@ try:
         rate = 0.0123456789
     hidden = int(parse(sys.argv, ["--hidden", "-h"]))
     if not hidden or hidden == "":
-        hidden = 512
+        hidden = 650
     nbatches = int(parse(sys.argv, ["--batch", "-b"]))
     if not nbatches:
         nbatches = 2
@@ -317,7 +328,7 @@ text = []
 e = 0
 c = 0
 
-#open file
+# open file
 with open(filename, "r") as f:
     # reads all lines and removes non alphabet words
     intext = f.read()
@@ -332,8 +343,8 @@ for l in text:
 
     if l not in alphabet:
         alphabet.append(l)
-        print("\r{}% - {}/{}".format(int(c/len(text)*100), c, len(text)), end="")
-    c+=1
+        print("\r{}% - {}/{}".format(int(c / len(text) * 100), c, len(text)), end="")
+    c += 1
 
 alphabet.sort()
 
@@ -342,52 +353,56 @@ model = Model(alphabet_size, n_prev, nbatches, dropout, rate, hidden).cuda()
 if not model_filename == None:
     loadmodel()
 
-#initialize and/or reset model for parameter search
-def reset_model():
 
+# initialize and/or reset model for parameter search
+def reset_model():
     if len(keys) > 0:
         print("\n -- Init model -- \nParameters   | Count")
         for key in keys:
             print(key, " ", results[key])
 
-    #main cycle of training program begins
+    # main cycle of training program begins
     while True:
-        #splash(False)
+        # splash(False)
 
         r = random.choice(rate_parameters)
         rate_parameters.remove(r)
-        d = random.choice(dropout_parameters)
-        dropout_parameters.remove(d)
-        t = random.choice(temperature_parameters)
-        temperature_parameters.remove(t)
+        #d = random.choice(dropout_parameters)
+        #dropout_parameters.remove(d)
+        #t = random.choice(temperature_parameters)
+        #temperature_parameters.remove(t)
+        d = 0.5
 
         model = Model(alphabet_size, n_prev, nbatches, d, r, hidden).cuda()
-        model.counter = n_prev-1
+        model.counter = n_prev - 1
 
-        print("\nParameters: \n -Rate: {} \n -Dropout: {}\n -Temperature: {}".format(r, d, t))
+        print("\nParameters: \n -Rate: {} \n -Dropout: {}\n -Temperature: {}".format(r, d, temperature))
 
-        train_cycle(model, t)
+        train_cycle(model, temperature)
 
-#encode vector from char
+
+# encode vector from char
 def one_hot(char):
     output = torch.zeros(alphabet_size).cuda()
     output[alphabet.index(char)] = 1
 
     return output
 
-#get output char from vectors
+
+# get output char from vectors
 def get_output(inp, t):
+    inp = torch.nn.Softmax(dim=0)((inp / t).exp())
+    #sample = torch.multinomial(inp / inp.sum(), 1)[:]
+    inp = inp / inp.sum()
+    inp = inp.cpu().detach().numpy()
 
-    inp = torch.nn.Softmax(dim=0)((inp/t).exp())
-    sample = torch.multinomial(inp/inp.sum(), 1)[:]
+    sample = numpy.random.choice(alphabet, p=inp)
+    return sample
 
-    return alphabet[sample]
 
-#training cycle -- runs until net gets stuck in loop
+# training cycle -- runs until net gets stuck in loop
 
 def train_cycle(model, temperature):
-
-
     while True:
 
         t = 0
@@ -397,100 +412,107 @@ def train_cycle(model, temperature):
 
         model.optimizer.zero_grad()
 
-        steps = 200
+        steps = 1000
         model.runs += 1
-        while t < steps:
+        print("")
 
-            #get target char
-            new_letter = alphabet.index(text[(model.counter+1)%len(text)])
+        if not freerun:
+            while t < steps:
 
-            #make target vector
-            target = [new_letter for _ in range(nbatches)]
-            target = torch.tensor(target).cuda()
+                # get target char
+                new_letter = alphabet.index(text[(model.counter + 1) % len(text)])
 
-            inp = model.get_input_vector(model.field)
-            inp = [inp for _ in range(nbatches)]
-            inp = torch.stack(inp)
+                # make target vector
+                target = [new_letter for _ in range(nbatches)]
+                target = torch.tensor(target).cuda()
 
-            inp = torch.nn.functional.normalize(inp, dim=0)
-            out = model.forward(inp)
+                inp = model.get_input_vector(model.field)
+                inp = [inp for _ in range(nbatches)]
+                inp = torch.stack(inp)
 
-            #get outputs
-            char = []
+                inp = torch.nn.functional.normalize(inp, dim=0)
+                out = model.forward(inp)
 
-            for o in out.split(1):
-                a = get_output(o[0], temperature)
+                # get outputs
+                char = []
 
-                #a = alphabet[torch.argmax(out)]
-                char.append(a)
+                for o in out.split(1):
+                    a = get_output(o[0], temperature)
 
-            #get input text
-            f = ""
-            for z in model.field:
-                f += z
-            #get output text
-            c = ''.join(str(e) for e in char)
+                    # a = alphabet[torch.argmax(out)]
+                    char.append(a)
 
-            progress = int(100*(t / steps))
+                # get input text
+                f = ""
+                for z in model.field:
+                    f += z
+                # get output text
+                c = ''.join(str(e) for e in char)
 
-            if t % 10 == 0:
-                txt = colored("\r ▲ {} | Training | Progress: {}% | {}/{} | Epoch: {} | Batch: {} | {} | {} | {} |".format(model.count, progress, model.counter, len(text), model.epochs, model.batches, f, c, alphabet[new_letter]),
-                          attrs=['reverse'])
-                print(txt,end="")
+                progress = int(100 * (t / steps))
 
-            #print(c, end="")
-            #sys.stdout.flush()
+                if t % 10 == 0:
+                    txt = colored(
+                        "\r ▲ {} | Training | Progress: {}% | {}/{} | Epoch: {} | Batch: {} | {} | {} | {} |".format(
+                            model.count, progress, model.counter, len(text), model.epochs, model.batches, f, c,
+                            alphabet[new_letter]),
+                        attrs=['reverse'])
+                    print(txt, end="")
 
-            model.counter += 1
+                # print(c, end="")
+                # sys.stdout.flush()
 
-            loss = model.loss_function(out, target)
-            total_loss += loss.item()
-            model.optimizer.zero_grad()
-            loss.backward(retain_graph=True)
-            model.optimizer.step()
+                model.counter += 1
 
-            t += 1
+                loss = model.loss_function(out, target)
+                total_loss += loss.item()
+                model.optimizer.zero_grad()
+                loss.backward(retain_graph=True)
+                model.optimizer.step()
 
-            if model.counter > len(text):
-                model.epochs += 1
-                model.batches = 0
-                model.counter = 0
-                print("\nNew Epoch")
+                t += 1
 
-            force = random.random() < 0.5
+                if model.counter > len(text):
+                    model.epochs += 1
+                    model.batches = 0
+                    model.counter = 0
+                    print("\nNew Epoch")
 
-            model.field.append(alphabet[new_letter])
-            model.field.pop(0)
+                force = random.random() < 0.5
 
-        writer.add_scalar('time', torch.tensor(total_time), model.runs)
+                model.field.append(alphabet[new_letter])
+                model.field.pop(0)
 
-        print("\nAvg Loss: {} | Generating text...".format(total_loss/t))
-        model.count += 1
-        sys.stdout.flush()
-        del total_loss
-        torch.cuda.empty_cache()
+            writer.add_scalar('time', torch.tensor(total_time), model.runs)
 
-        model.batches += 1
-        total_loss = 0
-        t = 0
+            print("\nAvg Loss: {} | Generating text...".format(total_loss / t))
+            model.count += 1
+            sys.stdout.flush()
+            del total_loss
+            torch.cuda.empty_cache()
 
-        writer.add_scalar('total_loss', int(total_loss), model.counter)
+            model.batches += 1
+            total_loss = 0
+            t = 0
+
+            writer.add_scalar('total_loss', int(total_loss), model.counter)
 
         variety = []
         if model.runs % 10 == 0:
             steps = 1000
         else:
             steps = 300
-            
+
         for i in range(steps):
-            #print(model.field,end="")
-            #print(" ",end="")
+            if freerun: steps = 0
+            # print(model.field,end="")
+            # print(" ",end="")
             inp = model.get_input_vector(model.field)
             inp = [inp for _ in range(nbatches)]
             inp = torch.stack(inp)
             out = model.forward(inp)
 
-            #get outputs
+            # get outputs
             char = []
             output = []
 
@@ -504,7 +526,7 @@ def train_cycle(model, temperature):
                 variety.append(c)
 
             if model.runs % 1 == 0:
-                print(c,end="")
+                print(c, end="")
                 sys.stdout.flush()
 
             model.field.append(c)
@@ -512,14 +534,13 @@ def train_cycle(model, temperature):
 
         model.clear_internal_states()
 
-        variety = int(100*(len(variety)/alphabet_size))
+        variety = int(100 * (len(variety) / alphabet_size))
         print("\nVariety: {}\n".format(variety))
         writer.add_scalar('variety', variety, model.runs)
-        #for p in model.parameters():
+        # for p in model.parameters():
         #    print(p)
         if search:
             if variety < 5:
-
                 archive = str("d:{}r:{}t:{}".format(model.d, model.r, temperature))
                 results[archive] = model.count
                 keys.append(archive)
@@ -531,7 +552,8 @@ def train_cycle(model, temperature):
 
                 return
 
-#initialize program
+
+# initialize program
 if search:
     reset_model()
 else:
