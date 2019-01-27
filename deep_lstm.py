@@ -26,12 +26,13 @@ else:
 results = dict()
 examined = dict()
 
-keys = []
-best = []
-
+#parameter search mode - default off
 search = False
+
+#freerun mode - generate text from saved model
 freerun = False
 
+#generate parameter search table for parameter search mode
 if search:
     # create parameter search space
     rate_parameters = []
@@ -57,7 +58,7 @@ if search:
     print(len(dropout_parameters))
     print(len(rate_parameters))
 
-
+#defines single LSTM layer
 class LSTM(nn.Module):
 
     def __init__(self, size, hidden, batch, prev, rate):
@@ -77,8 +78,8 @@ class LSTM(nn.Module):
         self.input_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
         self.input_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
 
-        self.state_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
-        self.state_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
+        self.focus_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
+        self.focus_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
 
         self.output_input = torch.nn.Linear(size * prev * batch, self.hidden_size)
         self.output_hidden = torch.nn.Linear(self.hidden_size, self.hidden_size)
@@ -107,7 +108,7 @@ class LSTM(nn.Module):
         # process layers
         f = torch.add(self.forget_input(x), self.forget_hidden(self.hidden))
         i = torch.add(self.input_input(x), self.input_hidden(self.hidden))
-        s = torch.add(self.state_input(x), self.state_hidden(self.hidden))
+        s = torch.add(self.focus_input(x), self.focus_hidden(self.hidden))
         o = torch.add(self.output_input(x), self.output_hidden(self.hidden))
 
         # activations
@@ -130,10 +131,12 @@ class Model(nn.Module):
     def __init__(self, size, prev, batch_size, dropout, rate, hidden):
         super(Model, self).__init__()
 
+        #define two LSTM layers
         self.rnn1 = LSTM(size, hidden, batch_size, prev, rate).cuda()
         self.rnn2 = LSTM(hidden, hidden, batch_size, 1, rate).cuda()
 
-        self.output_decoder1 = torch.nn.Linear(hidden * batch_size, size * batch_size).cuda()
+        #linear decoder layer
+        self.decoder = torch.nn.Linear(hidden * batch_size, size * batch_size).cuda()
 
         self.d = dropout
         self.r = rate
@@ -148,10 +151,13 @@ class Model(nn.Module):
 
         self.dropout = torch.nn.Dropout(dropout)
 
+        #field contains the current state of inputs for the model eg ["T", "H", "E".. etc
         self.field = [text[x] for x in range(n_prev)]
 
+        #zeros out LSTM hidden and context vector
         self.clear_internal_states()
 
+        #defines loss and optimizer
         self.loss_function = torch.nn.CrossEntropyLoss()
         # self.optimizer = torch.optim.Adam([
         #    {'params': self.parameters()},
@@ -159,6 +165,7 @@ class Model(nn.Module):
         self.optimizer = torch.optim.SGD(params=self.parameters(), lr=rate, momentum=momentum)
         self.initialize_weights()
 
+        #standard deviation for module parameters
         # std = 1.0/math.sqrt(self.rnn.hidden_size)
 
         # for p in self.parameters():
@@ -169,9 +176,10 @@ class Model(nn.Module):
         self.rnn2.reset()
 
     def initialize_weights(self):
-        self.output_decoder1.bias.data.fill_(0)
-        self.output_decoder1.weight.data.uniform_(-1, 1)
+        self.decoder.bias.data.fill_(0)
+        self.decoder.weight.data.uniform_(-1, 1)
 
+    #converts array of chars into matrix for input
     def get_input_vector(self, chars):
         out = []
 
@@ -190,17 +198,16 @@ class Model(nn.Module):
         x = self.rnn2(x)
         x = self.dropout(x)
 
-        x = self.output_decoder1(x)
+        x = self.decoder(x)
         x = x.view(nbatches, -1)
 
         return x
 
-
 def splash(a):
     if a:
         print(
-            "RNN Text Generator\nUsage:\n\n-f --filename: filename of input text - required\n-h --hidden: number of hidden layers, default 1\n-r --rate: learning rate\n-p --prev: number of previous states to observe, default 0.05")
-        print("\nExample usage: <command> -f input.txt -h 5 -r 0.025")
+            "RNN Text Generator\nUsage:\n\n-f --filename: filename of input text - required\n-h --hidden: number of hidden layers, default 1\n-r --rate: learning rate\n-p --prev: number of previous states to observe, default 0.05\n-t --temperature: sampling temperature")
+        print("\nExample usage: <command> -f input.txt -h 128 -r 0.01234 -t 0.77")
     else:
         print("\nRNN Text Generator\n")
         print("Alphabet size: {}".format(alphabet_size))
@@ -216,15 +223,13 @@ def splash(a):
         print(datetime.datetime.now())
         print("\n")
 
-
 def getIndexFromLetter(letter, list):
     return list.index(letter)
-
 
 def getLetterFromIndex(i, list):
     return list[i]
 
-
+#parse argument
 def parse(args, arg):
     for i in range(len(args)):
         if args[i] in arg:
@@ -237,7 +242,7 @@ def parse(args, arg):
 
     return False
 
-
+#save model parameters to a file
 def savemodel():
     print("Save model parameters? [y/n]➡")
     filename_input = input()
@@ -264,7 +269,7 @@ def savemodel():
     # print(best)
     quit()
 
-
+#load model parameters from a file
 def loadmodel():
     print("Load")
     # load model parameters if checkpoint specified
@@ -282,10 +287,11 @@ def loadmodel():
     else:
         print("New model")
 
-
+#register exit event to save model
 atexit.register(savemodel)
 model_filename = None
 
+#input arguments
 try:
     model_filename = parse(sys.argv, ["--load", "-l"])
     filename = parse(sys.argv, ["--filename", "-f"])
@@ -317,6 +323,7 @@ except:
     splash(True)
     quit()
 
+#initial symbol space
 alphabet = [' ', '!', '"', '#', '$', '%', '&', "'",
             '(', ')', '*', '+', ',', '-', '.', '/',
             '0', '1', '2', '3', '4', '5', '6', '7',
@@ -329,6 +336,8 @@ alphabet = [' ', '!', '"', '#', '$', '%', '&', "'",
             'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q',
             'r', 's', 't', 'u', 'v', 'w', 'x', 'y',
             'z', '|', '~', '¶']
+
+#defines array for subject text
 text = []
 e = 0
 c = 0
@@ -351,20 +360,18 @@ for l in text:
         print("\r{}% - {}/{}".format(int(c / len(text) * 100), c, len(text)), end="")
     c += 1
 
+#very important for symbol space to be in alphabetical order
 alphabet.sort()
-
 alphabet_size = len(alphabet)
-model = Model(alphabet_size, n_prev, nbatches, dropout, rate, hidden).cuda()
-if not model_filename == None:
+
+#create initial model or load
+if model_filename == None:
+    model = Model(alphabet_size, n_prev, nbatches, dropout, rate, hidden).cuda()
+else:
     loadmodel()
 
-
-# initialize and/or reset model for parameter search
+# initialize and/or reset model for parameter search mode
 def reset_model():
-    if len(keys) > 0:
-        print("\n -- Init model -- \nParameters   | Count")
-        for key in keys:
-            print(key, " ", results[key])
 
     # main cycle of training program begins
     while True:
@@ -384,7 +391,6 @@ def reset_model():
         print("\nParameters: \n -Rate: {} \n -Dropout: {}\n -Temperature: {}".format(r, d, temperature))
 
         train_cycle(model, temperature)
-
 
 # encode vector from char
 def one_hot(char):
@@ -406,7 +412,6 @@ def get_output(inp, t):
 
 
 # training cycle -- runs until net gets stuck in loop
-
 def train_cycle(model, temperature):
     while True:
 
@@ -415,8 +420,7 @@ def train_cycle(model, temperature):
         total_time = 0
         total_loss = 0
 
-        model.optimizer.zero_grad()
-
+        #1000 runs per minibatch
         steps = 1000
         model.runs += 1
         print("")
@@ -456,6 +460,7 @@ def train_cycle(model, temperature):
 
                 progress = int(100 * (t / steps))
 
+                #display some stats and progress
                 if t % 10 == 0:
                     txt = colored(
                         "\r ▲ {} | Training | Progress: {}% | {}/{} | Epoch: {} | Batch: {} | {} | {} | {} |".format(
@@ -464,32 +469,36 @@ def train_cycle(model, temperature):
                         attrs=['reverse'])
                     print(txt, end="")
 
+                #print each character in a series
                 # print(c, end="")
                 # sys.stdout.flush()
 
+                #increment counters
                 model.counter += 1
+                t += 1
 
+                #calculate loss for pass
                 loss = model.loss_function(out, target)
                 total_loss += loss.item()
                 model.optimizer.zero_grad()
                 loss.backward(retain_graph=True)
                 model.optimizer.step()
 
-                t += 1
-
+                #check if we have reached end of text file
                 if model.counter > len(text):
                     model.epochs += 1
                     model.batches = 0
                     model.counter = 0
                     print("\nNew Epoch")
 
-                force = random.random() < 0.5
-
+                #appends new letter to end of field array
                 model.field.append(alphabet[new_letter])
                 model.field.pop(0)
 
+            #tensorboardx
             writer.add_scalar('time', torch.tensor(total_time), model.runs)
 
+            #minibatch end stats
             print("\nAvg Loss: {} | Generating text...".format(total_loss / t))
             model.count += 1
             sys.stdout.flush()
@@ -508,6 +517,7 @@ def train_cycle(model, temperature):
         else:
             steps = 300
 
+        #free generation cycle
         for i in range(steps):
             if freerun: steps = 0
             # print(model.field,end="")
@@ -544,17 +554,13 @@ def train_cycle(model, temperature):
         writer.add_scalar('variety', variety, model.runs)
         # for p in model.parameters():
         #    print(p)
+        #if parameter search mode enabled test if network is failing or succeeding/stuck
         if search:
             if variety < 5:
                 archive = str("d:{}r:{}t:{}".format(model.d, model.r, temperature))
-                results[archive] = model.count
-                keys.append(archive)
-
                 return
             if model.count > 999:
                 archive = str("dropout: {} rate: {} temperature: {}".format(model.d, model.r, temperature))
-                best.append(archive)
-
                 return
 
 
