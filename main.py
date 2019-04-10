@@ -2,10 +2,6 @@
 
 import torch
 import sys
-from termcolor import colored
-import random
-from nltk.tokenize import word_tokenize
-from nltk.tokenize import sent_tokenize
 
 class lstm(torch.nn.Module):
     def __init__(self, hidden_size, rate):
@@ -24,17 +20,18 @@ class lstm(torch.nn.Module):
         self.output_h = torch.nn.Linear(hidden_size, hidden_size)
 
         self.reset_hidden()
+        self.c = torch.zeros(hidden_size).cuda()
+
         self.decoder1 = torch.nn.Linear(hidden_size, int(hidden_size/2))
         self.decoder2 = torch.nn.Linear(int(hidden_size/2), int(hidden_size/3))
         self.decoder3 = torch.nn.Linear(int(hidden_size/3), alphabet_size)
 
         self.loss = torch.nn.BCELoss()
         print(rate)
-        self.optim = torch.optim.Adam(lr=float(rate), params=self.parameters())
+        self.optim = torch.optim.SGD(lr=float(rate), params=self.parameters())
 
     def reset_hidden(self):
         self.h = torch.zeros(hidden_size).cuda()
-        self.c = torch.zeros(hidden_size).cuda()
 
     def forward(self, input_vec):
 
@@ -55,6 +52,7 @@ class lstm(torch.nn.Module):
         self.c = c
         self.h = h_
 
+        h_ = torch.nn.Dropout(0.1)(h_)
         d = self.decoder1(h_)
         d = torch.nn.Tanh()(d)
         d = self.decoder2(d)
@@ -75,10 +73,13 @@ with open(filename, "r") as f:
 
 f.close()
 
-sent_token = book
+book = list(book)
 text = []
 
-for t in sent_token:
+for t in book:
+    if t == "\n":
+        t = "¶"
+    #print(t,end="")
     text.append(t)
 
 for i,e in enumerate(book):
@@ -86,24 +87,25 @@ for i,e in enumerate(book):
         alphabet.append(e.lower())
 
 alphabet.sort()
+alphabet[alphabet.index("\n")] = "¶"
 alphabet_size = len(alphabet)
 
 epochs = 0
 
 #hyper parameters
-hidden_size = 32
+hidden_size = 512
 n_chars = 1
 batch = 1
-sequence_length = 2
+sequence_length = 8
 step = 0
 steps = 10000
-rate = 0.0001
+rate = 0.00001
 c = 0
 total_loss = 0.0
 n_correct = 0
 temperature = 1.0
 
-render = True
+render = False
 greedy = True
 
 one_hot_vecs = {}
@@ -119,30 +121,26 @@ def weights_init(m):
 def one_hot(char):
 
     t = torch.zeros(alphabet_size).cuda()
-    if not char == " ":
-        t[alphabet.index(char.lower())] = 1.0
+    t[alphabet.index(char.lower())] = 1.0
     return t
 
 def get_next_seq(character):
     c = character
     new = False
-    seq = text
 
     if c >= len(text):
-        sequence = 0
         c = 0
-        sys.stdout.flush()
         new = True
 
     i = 0
     out = []
 
     for i in range(sequence_length):
-        char = one_hot(seq[(c+i)%len(seq)].lower())
+        char = one_hot(text[(c+i)%len(text)].lower())
         out.append(char)
 
     i+=1
-    target = one_hot(seq[(c+i)%len(seq)].lower()).cuda()
+    target = one_hot(text[(c+i)%len(text)].lower()).cuda()
 
     return out, target, c+1, new
 
@@ -183,12 +181,13 @@ while True:
         a = 0
 
         if new:
-            for o in out_text:
-                print(o,end="")
+            for i in range(int(len(out_text)/4)):
+                print(out_text[i],end="")
             out_text.clear()
             avg_loss = round(total_loss / len(text), 4)
             n_correct = 0
             counter = 0
+            model.reset_hidden()
 
         d, out = model.forward(torch.cat(inp))
 
@@ -196,7 +195,6 @@ while True:
         a = probs.sample()
 
         outchar = alphabet[a]
-        #outchar = alphabet[torch.argmax(out)]
         targetchar = alphabet[torch.argmax(target)]
 
         done = False
@@ -230,23 +228,17 @@ while True:
 
         out_text.append(outchar)
 
-        progress = int(100*(sequence/len(text)))
+        progress = int(100*(c/len(text)))
+
+        if targetchar == "¶":
+            sys.stdout.flush()
+            model.reset_hidden()
 
         if not render:
-            if outchar == "\n":
-                outchar = "/n"
-            if targetchar == "\n":
-                targetchar = "/n"
-
             if counter % 100 == 0:
-                print("\r[Search{}|Epoch{}|Progress{}%|{}|{}|{}|loss:{}|avg:{}|{}|Acc:{}%|lr:{}]".format(total_reset, epochs, progress, outchar, targetchar, a, loss.item()/counter, avg_loss, indicator, accuracy, rate),end="")
+                print("\r[Epoch{}|Progress{}%|{}|loss:{}|avg:{}|{}|Acc:{}%]".format(epochs, progress, a, loss.item()/counter, avg_loss, indicator, accuracy),end="")
         else:
-            if outchar == "	":
-                outchar = ">"
             print(outchar,end="")
-            #print(targetchar)
-
             sys.stdout.flush()
 
         del out, inp, target, outchar, targetchar
-        torch.cuda.empty_cache()
