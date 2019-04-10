@@ -2,7 +2,11 @@
 
 import torch
 import sys
+import datetime
+from termcolor import colored
+import atexit
 
+#model
 class lstm(torch.nn.Module):
     def __init__(self, hidden_size, rate):
         super(lstm, self).__init__()
@@ -23,11 +27,10 @@ class lstm(torch.nn.Module):
         self.c = torch.zeros(hidden_size).cuda()
 
         self.decoder1 = torch.nn.Linear(hidden_size, int(hidden_size/2))
-        self.decoder2 = torch.nn.Linear(int(hidden_size/2), int(hidden_size/3))
-        self.decoder3 = torch.nn.Linear(int(hidden_size/3), alphabet_size)
+        self.decoder2 = torch.nn.Linear(int(hidden_size/2), alphabet_size)
 
         self.loss = torch.nn.BCELoss()
-        print(rate)
+        print("Learning rate: ", rate)
         self.optim = torch.optim.SGD(lr=float(rate), params=self.parameters())
 
     def reset_hidden(self):
@@ -56,17 +59,16 @@ class lstm(torch.nn.Module):
         d = self.decoder1(h_)
         d = torch.nn.Tanh()(d)
         d = self.decoder2(d)
-        d = torch.nn.Tanh()(d)
-        d = self.decoder3(d)
         d = torch.nn.Softmax(dim=-1)(d/temperature)
 
         return h_, d
 
+#load dataset
 filename = sys.argv[1]
 text = []
 alphabet = []
 
-#open
+#open file
 with open(filename, "r") as f:
     # reads all lines and removes non alphabet words
     book = f.read()
@@ -76,6 +78,7 @@ f.close()
 book = list(book)
 text = []
 
+#parse book
 for t in book:
     if t == "\n":
         t = "¶"
@@ -86,6 +89,9 @@ for i,e in enumerate(book):
     if e.lower() not in alphabet:
         alphabet.append(e.lower())
 
+del book
+
+#sort/format tokens
 alphabet.sort()
 alphabet[alphabet.index("\n")] = "¶"
 alphabet_size = len(alphabet)
@@ -144,101 +150,121 @@ def get_next_seq(character):
 
     return out, target, c+1, new
 
-#embed = W2V(alphabet_size, embed_size).cuda()
-model = lstm(hidden_size, rate).cuda()
+def savemodel():
+    print("Save model parameters? [y/n]➡")
+    filename_input = input()
 
-#weights_init(embed)
+    if filename_input == 'y' or filename_input == 'Y' or filename_input.lower() == 'yes':
+        filename = "Model-" + str(datetime.datetime.now()).replace(" ", "_")
+        print("Save as filename [default: {}]➡".format(filename))
+
+        filename_input = input()
+        if not filename_input == "":
+            filename = "Model-" + str(filename_input).replace(" ", "_")
+
+        print("Saving model as {}...".format(filename))
+        modelname = "./models/{}".format(filename)
+
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': model.optim.state_dict()
+        }, modelname)
+
+    # print("Best parameters:")
+    # print(best)
+    quit()
+
+atexit.register(savemodel)
+
+#init model
+model = lstm(hidden_size, rate).cuda()
 weights_init(model)
 
 counter = 1
 
 start = step
 out_text = []
-first = True
 
-letter = 0
 c = 1
-a = 0
-sequence = 0
 
 for a in alphabet:
     print(a,end=" ")
 
 print(" - Size:{}\n".format(alphabet_size))
 
-total_reset = -1
-
-#outer loop runs forever
+#train loop
 while True:
-    total_reset += 1
-    #inner loop breaks if nan output
-    while True:
 
-        inp = torch.zeros(alphabet_size)
+    inp = torch.zeros(alphabet_size)
 
-        inp, target, c, new = get_next_seq(c)
+    inp, target, c, new = get_next_seq(c)
 
-        a = 0
+    a = 0
 
-        if new:
-            for i in range(int(len(out_text)/4)):
-                print(out_text[i],end="")
-            out_text.clear()
-            avg_loss = round(total_loss / len(text), 4)
-            n_correct = 0
-            counter = 0
-            model.reset_hidden()
+    if new:
+        print("")
+        for i in range(int(len(out_text)/4)):
+            print(out_text[i],end="")
+        print("")
 
-        d, out = model.forward(torch.cat(inp))
+        out_text.clear()
+        avg_loss = round(total_loss / len(text), 4)
+        n_correct = 0
+        counter = 0
+        model.reset_hidden()
+        epochs += 1
 
-        probs = torch.distributions.Categorical(out)
-        a = probs.sample()
+    d, out = model.forward(torch.cat(inp))
 
-        outchar = alphabet[a]
-        targetchar = alphabet[torch.argmax(target)]
+    probs = torch.distributions.Categorical(out)
+    a = probs.sample()
 
-        done = False
+    outchar = alphabet[a]
+    targetchar = alphabet[torch.argmax(target)]
 
-        if outchar == targetchar:
-            a = "✅"
-            n_correct += 1
-            done = True
-        else:
-            a = "❌"
+    done = False
 
-        loss = model.loss(out.view(-1), target.view(-1))
-        loss.backward(retain_graph=True)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), -1.0, 1.0)
+    if outchar == targetchar:
+        a = "✅"
+        n_correct += 1
+        done = True
+    else:
+        a = "❌"
 
-    #    for p in model.parameters():
-    #        print(p.grad)
+    loss = model.loss(out.view(-1), target.view(-1))
+    loss.backward(retain_graph=True)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), -1.0, 1.0)
 
-        model.optim.step()
-        model.optim.zero_grad()
+#    for p in model.parameters():
+#        print(p.grad)
 
-        total_loss += loss.item()
-        counter += 1
+    model.optim.step()
+    model.optim.zero_grad()
 
-        accuracy = int(100*(n_correct/counter))
-        p_avg = avg_loss
-        if avg_loss > p_avg:
-            indicator = "⬆"
-        else:
-            indicator = "⬇"
+    total_loss += loss.item()
+    counter += 1
 
-        out_text.append(outchar)
+    accuracy = int(100*(n_correct/counter))
+    p_avg = avg_loss
+    if avg_loss > p_avg:
+        indicator = "⬆"
+    else:
+        indicator = "⬇"
 
-        progress = int(100*(c/len(text)))
+    out_text.append(outchar)
 
-        if targetchar == "¶":
-            sys.stdout.flush()
-            model.reset_hidden()
+    progress = int(100*(c/len(text)))
 
-        if not render:
-            if counter % 100 == 0:
-                print("\r[Epoch{}|Progress{}%|{}|loss:{}|avg:{}|{}|Acc:{}%]".format(epochs, progress, a, loss.item()/counter, avg_loss, indicator, accuracy),end="")
-        else:
-            print(outchar,end="")
-            sys.stdout.flush()
+    if targetchar == "¶":
+        sys.stdout.flush()
+        model.reset_hidden()
 
-        del out, inp, target, outchar, targetchar
+    if not render:
+        if counter % 100 == 0:
+            out = colored("\r[Epoch{}|Progress:[{}%]|[{}]|loss:{}|avg:{}|{}|Acc:{}%]".format(epochs, progress, a, loss.item(), avg_loss, indicator, accuracy),attrs=['reverse'])
+            print(out,end="")
+    else:
+        print(outchar,end="")
+        sys.stdout.flush()
+
+    del out, inp, target, outchar, targetchar
