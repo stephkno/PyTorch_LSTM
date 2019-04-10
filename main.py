@@ -92,7 +92,7 @@ alphabet_size = len(alphabet)
 
 epochs = 0
 
-#hyper parameters
+#parameters
 hidden_size = 512
 n_chars = 1
 batch = 1
