@@ -5,6 +5,7 @@ import sys
 import datetime
 from termcolor import colored
 import atexit
+import keyboard
 
 #model
 class lstm(torch.nn.Module):
@@ -24,17 +25,16 @@ class lstm(torch.nn.Module):
         self.output_h = torch.nn.Linear(hidden_size, hidden_size)
 
         self.reset_hidden()
-        self.c = torch.zeros(hidden_size).cuda()
 
-        self.decoder1 = torch.nn.Linear(hidden_size, int(hidden_size/2))
-        self.decoder2 = torch.nn.Linear(int(hidden_size/2), alphabet_size)
+        self.decoder = torch.nn.Linear(hidden_size, alphabet_size)
 
         self.loss = torch.nn.BCELoss()
         print("Learning rate: ", rate)
-        self.optim = torch.optim.SGD(lr=float(rate), params=self.parameters())
+        self.optim = torch.optim.Adam(lr=float(rate), params=self.parameters())
 
     def reset_hidden(self):
         self.h = torch.zeros(hidden_size).cuda()
+        self.c = torch.zeros(hidden_size).cuda()
 
     def forward(self, input_vec):
 
@@ -55,14 +55,60 @@ class lstm(torch.nn.Module):
         self.c = c
         self.h = h_
 
-        h_ = torch.nn.Dropout(0.1)(h_)
-        d = self.decoder1(h_)
-        d = torch.nn.Tanh()(d)
-        d = self.decoder2(d)
+        h_ = torch.nn.Dropout(0.0)(h_)
+        d = self.decoder(h_)
         d = torch.nn.Softmax(dim=-1)(d/temperature)
 
         return h_, d
+class gru(torch.nn.Module):
+    def __init__(self, hidden_size, rate):
+        super(lstm, self).__init__()
 
+        self.forget_i = torch.nn.Linear(alphabet_size*sequence_length, hidden_size)
+        self.forget_h = torch.nn.Linear(hidden_size, hidden_size)
+
+        self.input_i = torch.nn.Linear(alphabet_size*sequence_length, hidden_size)
+        self.input_h = torch.nn.Linear(hidden_size, hidden_size)
+
+        self.output_i = torch.nn.Linear(alphabet_size*sequence_length, hidden_size)
+        self.output_h = torch.nn.Linear(hidden_size, hidden_size)
+
+        self.reset_hidden()
+
+        self.decoder = torch.nn.Linear(hidden_size, alphabet_size)
+
+        self.loss = torch.nn.BCELoss()
+        print("Learning rate: ", rate)
+        self.optim = torch.optim.Adam(lr=float(rate), params=self.parameters())
+
+    def reset_hidden(self):
+        self.c = torch.zeros(hidden_size).cuda()
+
+    def forward(self, input_vec):
+
+        input_vec = input_vec.detach()
+
+        context = self.c.detach()
+
+        a = torch.nn.Sigmoid()(self.forget_i(input_vec) + self.forget_h(c))
+        b = torch.nn.Sigmoid()(self.input_i(input_vec) + self.input_h(c))
+
+        o_h = context * a
+        o_i = input_vec * a
+
+        context = context * 1 - i
+
+
+        o = torch.nn.Tanh()(self.output_i(o_i) + self.output_h(o_h))
+
+
+        self.c = context
+
+        h_ = torch.nn.Dropout(0.0)(c)
+        d = self.decoder(h_)
+        d = torch.nn.Softmax(dim=-1)(d/temperature)
+
+        return h_, d
 #load dataset
 filename = sys.argv[1]
 text = []
@@ -102,17 +148,17 @@ epochs = 0
 hidden_size = 512
 n_chars = 1
 batch = 1
-sequence_length = 8
+sequence_length = 6
 step = 0
 steps = 10000
-rate = 0.00001
+rate = 0.00000065
 c = 0
 total_loss = 0.0
 n_correct = 0
 temperature = 1.0
 
 render = False
-greedy = True
+show_grad = False
 
 one_hot_vecs = {}
 p_avg = 0
@@ -202,10 +248,11 @@ while True:
     a = 0
 
     if new:
-        print("")
-        for i in range(int(len(out_text)/4)):
-            print(out_text[i],end="")
-        print("")
+        if epochs % 100 == 0:
+            print("")
+            for i in range(int(len(out_text)/4)):
+                print(out_text[i],end="")
+            print("")
 
         out_text.clear()
         avg_loss = round(total_loss / len(text), 4)
@@ -233,15 +280,21 @@ while True:
 
     loss = model.loss(out.view(-1), target.view(-1))
     loss.backward(retain_graph=True)
-    torch.nn.utils.clip_grad_norm_(model.parameters(), -1.0, 1.0)
+    #torch.nn.utils.clip_grad_norm_(model.parameters(), -1.0, 1.0)
 
-#    for p in model.parameters():
-#        print(p.grad)
+    if keyboard.is_pressed(' '):
+        show_grad = True
+
+    if show_grad:
+        for p in model.parameters():
+            print(p)
+            print(p.grad)
+            break
+        show_grad = False
 
     model.optim.step()
     model.optim.zero_grad()
 
-    total_loss += loss.item()
     counter += 1
 
     accuracy = int(100*(n_correct/counter))
@@ -253,7 +306,7 @@ while True:
 
     out_text.append(outchar)
 
-    progress = int(100*(c/len(text)))
+    progress = round(100*(c/len(text)),4)
 
     if targetchar == "¶":
         sys.stdout.flush()
@@ -261,10 +314,10 @@ while True:
 
     if not render:
         if counter % 100 == 0:
-            out = colored("\r[Epoch{}|Progress:[{}%]|[{}]|loss:{}|avg:{}|{}|Acc:{}%]".format(epochs, progress, a, loss.item(), avg_loss, indicator, accuracy),attrs=['reverse'])
+            out = colored("\r[Epoch{}|Progress:[{}%]|[{}]|loss:{}|avg:{}|{}|Acc:{}%]".format(epochs, progress, a, 0, avg_loss, indicator, accuracy),attrs=['reverse'])
             print(out,end="")
     else:
         print(outchar,end="")
-        sys.stdout.flush()
+
 
     del out, inp, target, outchar, targetchar
